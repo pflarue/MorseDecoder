@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8">
+	<title>Morse Code Decoder with Dynamic Bargraph (650–900 Hz, 35wpm Max)</title>
+	<style>
+		body {
+			font-family: sans-serif;
+			margin: 20px;
+		}
+		#decodedOutput {
+			width: 100%;
+			height: 150px;
+			border: 1px solid #ccc;
+			padding: 10px;
+			font-size: 1.2em;
+			margin-top: 10px;
+			white-space: pre-wrap;
+		}
+		/* Tone indicator */
+		#indicator {
+			width: 20px;
+			height: 20px;
+			border-radius: 50%;
+			background-color: red;
+			display: inline-block;
+			margin-left: 10px;
+		}
+		/* Frequency bargraph canvas styling */
+		#freqBargraph {
+			border: 1px solid #ccc;
+			margin-top: 10px;
+		}
+	</style>
+</head>
+<body>
+	<h1>Morse Code Decoder with Dynamic Bargraph (650–900 Hz,12 - 30wpm Max)</h1>
+	<button id="startButton">Start</button>
+	<button id="stopButton" disabled>Stop</button>
+	<button id="resetButton" disabled>Reset</button>
+	<span style="margin-left:20px;">Input Tone Indicator: <div id="indicator"></div></span>
+	<div id="decodedOutput"></div>
+	<canvas id="freqBargraph" width="300" height="50"></canvas>
+
+	<script>
+		// Global variables and constants.
+		let audioContext, microphoneStream, scriptProcessor, analyser;
+		let isRunning = false;
+		const BUFFER_SIZE = 1024;
+		// Frequency scanning range.
+		const FREQ_MIN = 650;
+		const FREQ_MAX = 900;
+		const FREQ_STEP = 10;
+		const THRESHOLD = 10; // Adjust based on your microphone sensitivity.
+		let lastStateChangeTime = performance.now();
+		let currentToneState = false; // false: silence, true: tone present.
+		let letterBuffer = "";
+		let decodedText = "";
+		let dotDuration = 100; // initial dot duration (ms)
+		// Clamp dotDuration so it never goes below this value.
+		const MIN_DOT_DURATION = 35; // in ms, corresponding roughly to 35 wpm.
+		let animationFrameId; // for cancelling the graph update.
+
+		// Expanded Morse code dictionary.
+		const MORSE_CODE = {
+			".-": "A", "-...": "B", "-.-.": "C", "-..": "D", ".": "E",
+			"..-.": "F", "--.": "G", "....": "H", "..": "I", ".---": "J",
+			"-.-": "K", ".-..": "L", "--": "M", "-.": "N", "---": "O",
+			".--.": "P", "--.-": "Q", ".-.": "R", "...": "S", "-": "T",
+			"..-": "U", "...-": "V", ".--": "W", "-..-": "X", "-.--": "Y",
+			"--..": "Z",
+			"-----": "0", ".----": "1", "..---": "2", "...--": "3", "....-": "4",
+			".....": "5", "-....": "6", "--...": "7", "---..": "8", "----.": "9",
+			".-.-.-": ".",  // period
+			"--..--": ",",  // comma
+			"..--..": "?",  // question mark
+			".----.": "'",  // apostrophe
+			"-.-.--": "!",  // exclamation mark
+			"-..-.": "/",  // slash
+			"-.--.": "(",  // left parenthesis
+			"-.--.-": ")",  // right parenthesis
+			".-...": "&",  // ampersand
+			"---...": ":",  // colon
+			"-.-.-.": ";",  // semicolon
+			"-...-": "=",  // equals sign
+			".-.-.": "+",  // plus sign
+			"-....-": "-",  // hyphen/minus
+			"..--.-": "_",  // underscore
+			".-..-.": "\"",  // quotation marks
+			"...-..-": "$",  // dollar sign
+			".--.-.": "@",  // at sign
+			"-----.": "Ö"  // special mapping for Ö as provided
+		};
+
+		// Decodes a Morse string (e.g. ".-") to its corresponding character.
+		function decodeMorse(code) {
+			return MORSE_CODE[code] || "?";
+		}
+
+		// Goertzel algorithm implementation.
+		function goertzel(samples, sampleRate, targetFreq) {
+			const numSamples = samples.length;
+			const k = Math.round(0.5 + ((numSamples * targetFreq) / sampleRate));
+			const omega = (2.0 * Math.PI * k) / numSamples;
+			const cosine = Math.cos(omega);
+			const coeff = 2.0 * cosine;
+			let q0 = 0, q1 = 0, q2 = 0;
+			for (let i = 0; i < numSamples; i++) {
+				q0 = coeff * q1 - q2 + samples[i];
+				q2 = q1;
+				q1 = q0;
+			}
+			return Math.sqrt(q1 * q1 + q2 * q2 - q1 * q2 * coeff);
+		}
+
+		// Processes incoming audio blocks and performs tone detection and Morse decoding.
+		function processAudio(event) {
+			const inputBuffer = event.inputBuffer;
+			const samples = inputBuffer.getChannelData(0);
+			// Scan candidate frequencies.
+			let bestMagnitude = 0;
+			let bestFrequency = 700; // default.
+			for (let f = FREQ_MIN; f <= FREQ_MAX; f += FREQ_STEP) {
+				const mag = goertzel(samples, audioContext.sampleRate, f);
+				if (mag > bestMagnitude) {
+					bestMagnitude = mag;
+					bestFrequency = f;
+				}
+			}
+			const magnitude = bestMagnitude;
+			const toneDetected = magnitude > THRESHOLD;
+			const now = performance.now();
+
+			// Update the tone indicator.
+			document.getElementById("indicator").style.backgroundColor = toneDetected ? "green" : "red";
+
+			console.log("Detected frequency: " + bestFrequency + " Hz, Magnitude: " + magnitude.toFixed(2));
+
+			// Check for a state change (tone on/off) for Morse decoding.
+			if (toneDetected !== currentToneState) {
+				const duration = now - lastStateChangeTime;
+				lastStateChangeTime = now;
+
+				if (currentToneState) { // Tone ended.
+					if (duration < 1.5 * dotDuration) {
+						letterBuffer += ".";
+						// Update dotDuration only for dots.
+						dotDuration = 0.9 * dotDuration + 0.1 * duration;
+						// Clamp dotDuration so it never goes below MIN_DOT_DURATION.
+						dotDuration = Math.max(MIN_DOT_DURATION, dotDuration);
+						console.log("Detected dot: duration " + duration.toFixed(2) + " ms, updated dotDuration: " + dotDuration.toFixed(2));
+					} else {
+						letterBuffer += "-";
+						console.log("Detected dash: duration " + duration.toFixed(2) + " ms.");
+					}
+				} else { // Silence ended.
+					if (duration >= 1.5 * dotDuration && duration < 3.5 * dotDuration) {
+						const letter = decodeMorse(letterBuffer);
+						decodedText += letter;
+						console.log("Letter gap: duration " + duration.toFixed(2) + " ms, decoded letter: " + letter);
+						letterBuffer = "";
+						document.getElementById("decodedOutput").innerText = decodedText;
+					} else if (duration >= 3.5 * dotDuration) {
+						if (letterBuffer.length > 0) {
+							const letter = decodeMorse(letterBuffer);
+							decodedText += letter;
+							console.log("Word gap (letter): duration " + duration.toFixed(2) + " ms, decoded letter: " + letter);
+							letterBuffer = "";
+						}
+						decodedText += " ";
+						console.log("Word gap: added space.");
+						document.getElementById("decodedOutput").innerText = decodedText;
+					}
+				}
+				currentToneState = toneDetected;
+			}
+
+			console.log("Magnitude: " + magnitude.toFixed(2));
+		}
+
+		// Resets the decoder's internal parameters.
+		function resetParameters() {
+			lastStateChangeTime = performance.now();
+			currentToneState = false;
+			letterBuffer = "";
+			decodedText = "";
+			dotDuration = 100;
+			document.getElementById("decodedOutput").innerText = "";
+			console.log("Decoder parameters have been reset.");
+		}
+
+		// Update the frequency bargraph (display range 650–900 Hz).
+		function updateFreqGraph() {
+			if (!analyser) {
+				animationFrameId = requestAnimationFrame(updateFreqGraph);
+				return;
+			}
+			const freqData = new Uint8Array(analyser.frequencyBinCount);
+			analyser.getByteFrequencyData(freqData);
+			const canvas = document.getElementById("freqBargraph");
+			const ctx = canvas.getContext("2d");
+			ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+			// Define frequency display range.
+			const freqMin = 650, freqMax = 900;
+			const sweetSpotMin = 690, sweetSpotMax = 710;
+			const scale = canvas.width / (freqMax - freqMin);
+			const freqResolution = audioContext.sampleRate / analyser.fftSize;
+
+			// Find the dominant frequency in the range.
+			let startIndex = Math.floor(freqMin / freqResolution);
+			let endIndex = Math.ceil(freqMax / freqResolution);
+			let maxVal = 0, maxIndex = startIndex;
+			for (let i = startIndex; i < endIndex; i++) {
+				if (freqData[i] > maxVal) {
+					maxVal = freqData[i];
+					maxIndex = i;
+				}
+			}
+			const detectedFreq = maxIndex * freqResolution;
+
+			// Draw sweet spot region.
+			ctx.fillStyle = "#ccffcc";
+			ctx.fillRect((sweetSpotMin - freqMin) * scale, 0, (sweetSpotMax - sweetSpotMin) * scale, canvas.height);
+
+			// Draw frequency scale with tick marks.
+			ctx.strokeStyle = "#aaa";
+			ctx.beginPath();
+			for (let f = freqMin; f <= freqMax; f += 10) {
+				const x = (f - freqMin) * scale;
+				ctx.moveTo(x, canvas.height);
+				ctx.lineTo(x, canvas.height - 5);
+				ctx.fillText(f + " Hz", x + 2, canvas.height - 7);
+			}
+			ctx.stroke();
+
+			// Draw the detected frequency as a vertical blue line.
+			const x = (detectedFreq - freqMin) * scale;
+			ctx.strokeStyle = "blue";
+			ctx.beginPath();
+			ctx.moveTo(x, 0);
+			ctx.lineTo(x, canvas.height);
+			ctx.stroke();
+
+			// Display the detected frequency value.
+			ctx.fillStyle = "black";
+			ctx.font = "12px sans-serif";
+			ctx.fillText(detectedFreq.toFixed(1) + " Hz", x + 5, canvas.height / 2);
+
+			animationFrameId = requestAnimationFrame(updateFreqGraph);
+		}
+
+		// Starts the microphone capture and decoding process.
+		function startMorseDecoder() {
+			if (isRunning) return;
+			isRunning = true;
+			navigator.mediaDevices.getUserMedia({ audio: true })
+				.then(stream => {
+					audioContext = new (window.AudioContext || window.webkitAudioContext)();
+					microphoneStream = audioContext.createMediaStreamSource(stream);
+
+					// Create an analyser node for the bargraph.
+					analyser = audioContext.createAnalyser();
+					analyser.fftSize = 2048;
+					microphoneStream.connect(analyser);
+
+					// Create a ScriptProcessor node for Morse decoding.
+					scriptProcessor = audioContext.createScriptProcessor(BUFFER_SIZE, 1, 1);
+					scriptProcessor.onaudioprocess = processAudio;
+					microphoneStream.connect(scriptProcessor);
+					scriptProcessor.connect(audioContext.destination);
+
+					console.log("Morse decoder started.");
+					document.getElementById("startButton").disabled = true;
+					document.getElementById("stopButton").disabled = false;
+					document.getElementById("resetButton").disabled = false;
+					// Reset variables.
+					lastStateChangeTime = performance.now();
+					currentToneState = false;
+					letterBuffer = "";
+					decodedText = "";
+					dotDuration = 100;
+					document.getElementById("decodedOutput").innerText = "";
+					// Begin updating the frequency bargraph.
+					updateFreqGraph();
+				})
+				.catch(err => {
+					console.error("Error accessing microphone: ", err);
+				});
+		}
+
+		// Stops the decoding process and releases audio resources.
+		function stopMorseDecoder() {
+			if (!isRunning) return;
+			isRunning = false;
+			if (scriptProcessor) {
+				scriptProcessor.disconnect();
+				scriptProcessor.onaudioprocess = null;
+			}
+			if (microphoneStream) {
+				microphoneStream.disconnect();
+			}
+			if (analyser) {
+				analyser.disconnect();
+			}
+			if (audioContext) {
+				audioContext.close();
+			}
+			if (animationFrameId) {
+				cancelAnimationFrame(animationFrameId);
+			}
+			console.log("Morse decoder stopped.");
+			document.getElementById("startButton").disabled = false;
+			document.getElementById("stopButton").disabled = true;
+			document.getElementById("resetButton").disabled = true;
+		}
+
+		document.getElementById("startButton").addEventListener("click", startMorseDecoder);
+		document.getElementById("stopButton").addEventListener("click", stopMorseDecoder);
+		document.getElementById("resetButton").addEventListener("click", resetParameters);
+	</script>
+</body>
+</html>
