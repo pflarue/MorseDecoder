@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
 	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
 	<title>Morse Code Decoder with Dynamic Bargraph (650–900 Hz, 35wpm Max)</title>
 	<style>
 		body {
@@ -10,6 +11,7 @@
 		}
 		#decodedOutput {
 			width: 100%;
+			box-sizing: border-box;
 			height: 150px;
 			border: 1px solid #ccc;
 			padding: 10px;
@@ -17,19 +19,41 @@
 			margin-top: 10px;
 			white-space: pre-wrap;
 		}
-		/* Tone indicator */
+		/* Tone indicator bar graph */
 		#indicator {
-			width: 20px;
+			width: 100px;
 			height: 20px;
-			border-radius: 50%;
-			background-color: red;
+			border: 1px solid #ccc;
+			background-color: #eee;
 			display: inline-block;
 			margin-left: 10px;
+		}
+		#indicatorFill {
+			height: 100%;
+			background-color: green;
+			width: 0;
 		}
 		/* Frequency bargraph canvas styling */
 		#freqBargraph {
 			border: 1px solid #ccc;
 			margin-top: 10px;
+			display: block;
+		}
+		/* Media query for smaller devices */
+		@media (max-width: 600px) {
+			body {
+				margin: 10px;
+			}
+			h1 {
+				font-size: 1.5em;
+			}
+			#decodedOutput {
+				font-size: 1em;
+			}
+			#indicator {
+				width: 80px;
+				height: 16px;
+			}
 		}
 	</style>
 </head>
@@ -38,9 +62,13 @@
 	<button id="startButton">Start</button>
 	<button id="stopButton" disabled>Stop</button>
 	<button id="resetButton" disabled>Reset</button>
-	<span style="margin-left:20px;">Input Tone Indicator: <div id="indicator"></div></span>
+	<span style="margin-left:20px;">Input Tone Indicator:
+		<div id="indicator">
+			<div id="indicatorFill"></div>
+		</div>
+	</span>
 	<div id="decodedOutput"></div>
-	<canvas id="freqBargraph" width="300" height="50"></canvas>
+	<canvas id="freqBargraph" height="50"></canvas>
 
 	<script>
 		// Global variables and constants.
@@ -51,7 +79,9 @@
 		const FREQ_MIN = 650;
 		const FREQ_MAX = 900;
 		const FREQ_STEP = 10;
-		const THRESHOLD = 10; // Adjust based on your microphone sensitivity.
+		// Hysteresis thresholds to improve noise tolerance.
+		const THRESHOLD_ON	= 10; // must exceed this to register tone-on.
+		const THRESHOLD_OFF = 8; // tone remains active until magnitude falls below this.
 		let lastStateChangeTime = performance.now();
 		let currentToneState = false; // false: silence, true: tone present.
 		let letterBuffer = "";
@@ -128,16 +158,22 @@
 				}
 			}
 			const magnitude = bestMagnitude;
-			const toneDetected = magnitude > THRESHOLD;
-			const now = performance.now();
 
-			// Update the tone indicator.
-			document.getElementById("indicator").style.backgroundColor = toneDetected ? "green" : "red";
+			// Use hysteresis: if a tone is already active, drop only when magnitude falls below THRESHOLD_OFF.
+			const toneDetected = currentToneState ? (magnitude > THRESHOLD_OFF) : (magnitude > THRESHOLD_ON);
+
+			// Update the tone indicator as a bar graph.
+			let fillWidth = 0;
+			if (magnitude > THRESHOLD_ON) {
+				fillWidth = Math.min(100, (magnitude - THRESHOLD_ON) * 5);
+			}
+			document.getElementById("indicatorFill").style.width = fillWidth + "px";
 
 			console.log("Detected frequency: " + bestFrequency + " Hz, Magnitude: " + magnitude.toFixed(2));
 
 			// Check for a state change (tone on/off) for Morse decoding.
 			if (toneDetected !== currentToneState) {
+				const now = performance.now();
 				const duration = now - lastStateChangeTime;
 				lastStateChangeTime = now;
 
@@ -203,7 +239,7 @@
 
 			// Define frequency display range.
 			const freqMin = 650, freqMax = 900;
-			const sweetSpotMin = 690, sweetSpotMax = 710;
+			const sweetSpotMin = 650, sweetSpotMax = 710;
 			const scale = canvas.width / (freqMax - freqMin);
 			const freqResolution = audioContext.sampleRate / analyser.fftSize;
 
@@ -314,6 +350,16 @@
 			document.getElementById("stopButton").disabled = true;
 			document.getElementById("resetButton").disabled = true;
 		}
+
+		// Adjust canvas width for responsiveness.
+		function resizeCanvas() {
+			const canvas = document.getElementById("freqBargraph");
+			// Set the canvas width to 90% of the body's width.
+			canvas.width = document.body.clientWidth * 0.9;
+		}
+		window.addEventListener('resize', resizeCanvas);
+		// Initialise canvas size.
+		resizeCanvas();
 
 		document.getElementById("startButton").addEventListener("click", startMorseDecoder);
 		document.getElementById("stopButton").addEventListener("click", stopMorseDecoder);
