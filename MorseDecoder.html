@@ -3,7 +3,7 @@
 <head>
 	<meta charset="UTF-8">
 	<meta name="viewport" content="width=device-width, initial-scale=1.0">
-	<title>Morse Code Decoder with Dynamic Bargraph (650–900 Hz, 35wpm Max)</title>
+	<title>Morse Code Decoder (650–900 Hz, 35wpm Max)</title>
 	<style>
 		body {
 			font-family: sans-serif;
@@ -18,6 +18,7 @@
 			font-size: 1.2em;
 			margin-top: 10px;
 			white-space: pre-wrap;
+			overflow-y: scroll;
 		}
 		/* Tone indicator bar graph */
 		#indicator {
@@ -33,12 +34,7 @@
 			background-color: green;
 			width: 0;
 		}
-		/* Frequency bargraph canvas styling */
-		#freqBargraph {
-			border: 1px solid #ccc;
-			margin-top: 10px;
-			display: block;
-		}
+		#spectrum {vertical-align: bottom;}
 		/* Media query for smaller devices */
 		@media (max-width: 600px) {
 			body {
@@ -58,7 +54,7 @@
 	</style>
 </head>
 <body>
-	<h1>Morse Code Decoder with Dynamic Bargraph (650–900 Hz,12 - 30wpm Max)</h1>
+	<h1>Morse Code Decoder (650–900 Hz,12 - 30wpm Max)</h1>
 	<button id="startButton">Start</button>
 	<button id="stopButton" disabled>Stop</button>
 	<button id="resetButton" disabled>Reset</button>
@@ -68,9 +64,13 @@
 		</div>
 	</span>
 	<div id="decodedOutput"></div>
-	<canvas id="freqBargraph" height="50"></canvas>
+	<br />
+	Center the signal between the white lines.
+	<div><canvas id="spectrum" width="512" height="50"></canvas></div>
+	<div><canvas id="waterfall" width="512" height="150"></canvas></div>
 
 	<script>
+		"use strict"
 		// Global variables and constants.
 		let audioContext, microphoneStream, scriptProcessor, analyser;
 		let isRunning = false;
@@ -79,6 +79,7 @@
 		const FREQ_MIN = 650;
 		const FREQ_MAX = 900;
 		const FREQ_STEP = 10;
+		const FFTSIZE = 2048;
 		// Hysteresis thresholds to improve noise tolerance.
 		const THRESHOLD_ON	= 10; // must exceed this to register tone-on.
 		const THRESHOLD_OFF = 8; // tone remains active until magnitude falls below this.
@@ -120,6 +121,114 @@
 			"...-..-": "$",  // dollar sign
 			".--.-.": "@",  // at sign
 			"-----.": "Ö"  // special mapping for Ö as provided
+		};
+
+		// Define a 4-bit (16 values) RGB modified rainbow colormap from blue to red
+		// to use for the waterfall display.  A few additional colormap entries are
+		// also included.
+		let alpha = 0xFF
+		let colormap = [
+			[0x30, 0x12, 0x3b, alpha], [0x41, 0x43, 0xa7, alpha],
+			[0x47, 0x71, 0xe9, alpha], [0x3e, 0x9b, 0xfe, alpha],
+			[0x22, 0xc5, 0xe2, alpha], [0x1a, 0xe4, 0xb6, alpha],
+			[0x46, 0xf8, 0x84, alpha], [0x88, 0xff, 0x4e, alpha],
+			[0xb9, 0xf6, 0x35, alpha], [0xe1, 0xdd, 0x37, alpha],
+			[0xfa, 0xba, 0x39, alpha], [0xfd, 0x8d, 0x27, alpha],
+			[0xf0, 0x5b, 0x12, alpha], [0xd6, 0x35, 0x06, alpha],
+			[0xaf, 0x18, 0x01, alpha], [0x7a, 0x04, 0x03, alpha],
+			// special values
+			[0x00, 0x00, 0x00, alpha],  // 16 black
+			[0xFF, 0xFF, 0xFF, alpha],  // 17 white
+			[0xD0, 0xD0, 0xD0, alpha],  // 18 light gray
+		];
+		// TODO: Adjust plotxscale based on width?
+		let plotxscale = 6;
+		let plotyscale = 1;
+
+		let output = document.getElementById("decodedOutput");
+
+		let wfWidth = 512;
+		let wfHeight = 150;
+		const wfCanvas = document.getElementById("waterfall");
+		const wfCtx = wfCanvas.getContext("2d");
+		wfCtx.fillStyle = "#000000";
+		wfCtx.fillRect(0, 0, wfWidth, wfHeight);
+
+		let spWidth = 512;
+		let spHeight = 50;
+		const spCanvas = document.getElementById("spectrum");
+		const spCtx = spCanvas.getContext("2d");
+		spCtx.fillStyle = "#000000";
+		spCtx.fillRect(0, 0, spWidth, spHeight);
+
+		const drawSpectrum = (values, lowIndex, highIndex) => {
+			spCtx.fillStyle = "#000";
+			spCtx.fillRect(0, 0, plotxscale * spWidth, plotyscale * spHeight);
+			spCtx.beginPath();
+			spCtx.moveTo(0, plotyscale * spHeight);
+			for(var i=0; i<values.length; i++) {
+				spCtx.lineTo(
+					plotxscale * i,
+					plotyscale * (spHeight - values[i]*(spHeight/256)));
+			}
+			spCtx.lineTo(plotxscale * spWidth, plotyscale * spHeight);
+			spCtx.moveTo(0, plotyscale * spHeight);  // close for fill
+			spCtx.fillStyle = "#CCC";
+			spCtx.strokeStyle = "#CCC";
+			spCtx.fill();
+			// draw target frequency markers
+			spCtx.beginPath();
+			spCtx.moveTo(plotxscale * lowIndex, 0);
+			spCtx.lineTo(plotxscale * lowIndex, plotyscale * spHeight)
+			spCtx.moveTo(plotxscale * highIndex, 0);
+			spCtx.lineTo(plotxscale * highIndex, plotyscale * spHeight)
+			spCtx.strokeStyle = "#FFF";
+			spCtx.stroke();
+			spCtx.beginPath();
+			let centerIndex = Math.round(plotxscale * (lowIndex + highIndex) / 2);
+			spCtx.moveTo(centerIndex, 0);
+			spCtx.lineTo(centerIndex, plotyscale * spHeight)
+			spCtx.strokeStyle = "#000";
+			spCtx.stroke();
+		};
+
+		const addWaterfallLine = (values, lowIndex, highIndex) => {
+			// shift the existing image down by plotyscale pixels
+			wfCtx.drawImage(
+				wfCtx.canvas,
+				0,
+				0,
+				plotxscale * wfWidth,
+				plotyscale * wfHeight,
+				0,
+				plotyscale,
+				plotxscale * wfWidth,
+				plotyscale * wfHeight);
+			// expand values (uint8) to colormap values (RGBA per pixel)
+			let colorValues = new Uint8ClampedArray(
+				plotxscale * (values.length) * 4);  // filled with 0
+			for(var i=0; i<values.length; i++) {
+				for (var k=0; k<plotxscale; k++) {
+					for (var j=0; j<4; j++) {  // r, g, b
+						colorValues[
+							((plotxscale*i + k) * 4) + j
+						] = colormap[values[i]>>4][j];  // RGBA
+					}
+				}
+			}
+			let centercolor = 16;  // black
+			let edgecolor = 17;  // white
+			let centerIndex = Math.round(plotxscale * (lowIndex + highIndex) / 2);
+			for (var j=0; j<4; j++) {  // r, g, b
+				colorValues[plotxscale * lowIndex*4 + j] = colormap[edgecolor][j];
+				colorValues[centerIndex * 4 + j] = colormap[centercolor][j];
+				colorValues[plotxscale * highIndex*4 + j] = colormap[edgecolor][j];
+			}
+			let imageData = new ImageData(
+				colorValues, plotxscale * values.length, 1);
+			for (k=0; k<plotyscale; k++) {
+				wfCtx.putImageData(imageData, 0, k);
+			}
 		};
 
 		// Decodes a Morse string (e.g. ".-") to its corresponding character.
@@ -195,7 +304,9 @@
 						decodedText += letter;
 						console.log("Letter gap: duration " + duration.toFixed(2) + " ms, decoded letter: " + letter);
 						letterBuffer = "";
-						document.getElementById("decodedOutput").innerText = decodedText;
+						output.innerText = decodedText;
+						// scroll to show new output
+						output.scrollTop = output.scrollHeight;
 					} else if (duration >= 3.5 * dotDuration) {
 						if (letterBuffer.length > 0) {
 							const letter = decodeMorse(letterBuffer);
@@ -205,13 +316,13 @@
 						}
 						decodedText += " ";
 						console.log("Word gap: added space.");
-						document.getElementById("decodedOutput").innerText = decodedText;
+						output.innerText = decodedText;
+						// scroll to show new output
+						output.scrollTop = output.scrollHeight;
 					}
 				}
 				currentToneState = toneDetected;
 			}
-
-			console.log("Magnitude: " + magnitude.toFixed(2));
 		}
 
 		// Resets the decoder's internal parameters.
@@ -225,65 +336,20 @@
 			console.log("Decoder parameters have been reset.");
 		}
 
-		// Update the frequency bargraph (display range 650–900 Hz).
-		function updateFreqGraph() {
+		// Update the frequency plots.
+		function updatePlots() {
 			if (!analyser) {
 				animationFrameId = requestAnimationFrame(updateFreqGraph);
 				return;
 			}
 			const freqData = new Uint8Array(analyser.frequencyBinCount);
 			analyser.getByteFrequencyData(freqData);
-			const canvas = document.getElementById("freqBargraph");
-			const ctx = canvas.getContext("2d");
-			ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-			// Define frequency display range.
-			const freqMin = 650, freqMax = 900;
-			const sweetSpotMin = 650, sweetSpotMax = 710;
-			const scale = canvas.width / (freqMax - freqMin);
-			const freqResolution = audioContext.sampleRate / analyser.fftSize;
-
-			// Find the dominant frequency in the range.
-			let startIndex = Math.floor(freqMin / freqResolution);
-			let endIndex = Math.ceil(freqMax / freqResolution);
-			let maxVal = 0, maxIndex = startIndex;
-			for (let i = startIndex; i < endIndex; i++) {
-				if (freqData[i] > maxVal) {
-					maxVal = freqData[i];
-					maxIndex = i;
-				}
-			}
-			const detectedFreq = maxIndex * freqResolution;
-
-			// Draw sweet spot region.
-			ctx.fillStyle = "#ccffcc";
-			ctx.fillRect((sweetSpotMin - freqMin) * scale, 0, (sweetSpotMax - sweetSpotMin) * scale, canvas.height);
-
-			// Draw frequency scale with tick marks.
-			ctx.strokeStyle = "#aaa";
-			ctx.beginPath();
-			for (let f = freqMin; f <= freqMax; f += 10) {
-				const x = (f - freqMin) * scale;
-				ctx.moveTo(x, canvas.height);
-				ctx.lineTo(x, canvas.height - 5);
-				ctx.fillText(f + " Hz", x + 2, canvas.height - 7);
-			}
-			ctx.stroke();
-
-			// Draw the detected frequency as a vertical blue line.
-			const x = (detectedFreq - freqMin) * scale;
-			ctx.strokeStyle = "blue";
-			ctx.beginPath();
-			ctx.moveTo(x, 0);
-			ctx.lineTo(x, canvas.height);
-			ctx.stroke();
-
-			// Display the detected frequency value.
-			ctx.fillStyle = "black";
-			ctx.font = "12px sans-serif";
-			ctx.fillText(detectedFreq.toFixed(1) + " Hz", x + 5, canvas.height / 2);
-
-			animationFrameId = requestAnimationFrame(updateFreqGraph);
+			let startIndex = Math.floor(FREQ_MIN / (audioContext.sampleRate / FFTSIZE));
+			let endIndex = Math.ceil(FREQ_MAX / (audioContext.sampleRate / FFTSIZE));
+			drawSpectrum(freqData, startIndex, endIndex);
+			addWaterfallLine(freqData, startIndex, endIndex);
+			animationFrameId = requestAnimationFrame(updatePlots);
 		}
 
 		// Starts the microphone capture and decoding process.
@@ -295,9 +361,9 @@
 					audioContext = new (window.AudioContext || window.webkitAudioContext)();
 					microphoneStream = audioContext.createMediaStreamSource(stream);
 
-					// Create an analyser node for the bargraph.
+					// Create an analyser node for the plots.
 					analyser = audioContext.createAnalyser();
-					analyser.fftSize = 2048;
+					analyser.fftSize = FFTSIZE;
 					microphoneStream.connect(analyser);
 
 					// Create a ScriptProcessor node for Morse decoding.
@@ -316,9 +382,9 @@
 					letterBuffer = "";
 					decodedText = "";
 					dotDuration = 100;
-					document.getElementById("decodedOutput").innerText = "";
-					// Begin updating the frequency bargraph.
-					updateFreqGraph();
+					output.innerText = "";
+					// Begin updating the frequency plots.
+					updatePlots();
 				})
 				.catch(err => {
 					console.error("Error accessing microphone: ", err);
@@ -352,14 +418,16 @@
 		}
 
 		// Adjust canvas width for responsiveness.
-		function resizeCanvas() {
-			const canvas = document.getElementById("freqBargraph");
+		function resizeCanvases() {
 			// Set the canvas width to 90% of the body's width.
-			canvas.width = document.body.clientWidth * 0.9;
+			wfWidth = Math.round(document.body.clientWidth * 0.9);
+			wfCanvas.width = wfWidth;
+			spWidth = wfWidth;
+			spCanvas.width = wfWidth;
 		}
-		window.addEventListener('resize', resizeCanvas);
+		window.addEventListener('resize', resizeCanvases);
 		// Initialise canvas size.
-		resizeCanvas();
+		resizeCanvases();
 
 		document.getElementById("startButton").addEventListener("click", startMorseDecoder);
 		document.getElementById("stopButton").addEventListener("click", stopMorseDecoder);
