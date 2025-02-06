@@ -1,14 +1,15 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-	<meta charset="UTF-8">
-	<meta name="viewport" content="width=device-width, initial-scale=1.0">
-	<title>Morse Code Decoder (650–900 Hz, 35wpm Max)</title>
+	<meta charset="UTF-8" />
+	<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+	<title>Morse Code Decoder (650–900 Hz, 50 wpm Max)</title>
 	<style>
 		body {
 			font-family: sans-serif;
 			margin: 20px;
 		}
+
 		#decodedOutput {
 			width: 100%;
 			box-sizing: border-box;
@@ -18,8 +19,10 @@
 			font-size: 1.2em;
 			margin-top: 10px;
 			white-space: pre-wrap;
-			overflow-y: scroll;
+			/* Enable vertical scrolling: */
+			overflow-y: auto;
 		}
+
 		/* Tone indicator bar graph */
 		#indicator {
 			width: 100px;
@@ -34,7 +37,11 @@
 			background-color: green;
 			width: 0;
 		}
-		#spectrum {vertical-align: bottom;}
+
+		#spectrum {
+			vertical-align: bottom;
+		}
+
 		/* Media query for smaller devices */
 		@media (max-width: 600px) {
 			body {
@@ -54,10 +61,12 @@
 	</style>
 </head>
 <body>
-	<h1>Morse Code Decoder (650–900 Hz,12 - 30wpm Max)</h1>
+	<h1>Morse Code Decoder (650–900 Hz, 12 - 50 wpm)</h1>
 	<button id="startButton">Start</button>
 	<button id="stopButton" disabled>Stop</button>
 	<button id="resetButton" disabled>Reset</button>
+	<button id="CleartextButton">Clear Text</button>
+
 	<span style="margin-left:20px;">Input Tone Indicator:
 		<div id="indicator">
 			<div id="indicatorFill"></div>
@@ -74,23 +83,24 @@
 		// Global variables and constants.
 		let audioContext, microphoneStream, scriptProcessor, analyser;
 		let isRunning = false;
-		const BUFFER_SIZE = 1024;
+		const BUFFER_SIZE = 512;
 		// Frequency scanning range.
 		const FREQ_MIN = 650;
 		const FREQ_MAX = 900;
 		const FREQ_STEP = 10;
 		const FFTSIZE = 2048;
-		// Hysteresis thresholds to improve noise tolerance.
-		const THRESHOLD_ON	= 10; // must exceed this to register tone-on.
-		const THRESHOLD_OFF = 8; // tone remains active until magnitude falls below this.
+		// Hysteresis thresholds.
+		const THRESHOLD_ON = 10; // must exceed this to register tone-on
+		const THRESHOLD_OFF = 8; // tone remains active until mag < this
 		let lastStateChangeTime = performance.now();
-		let currentToneState = false; // false: silence, true: tone present.
+		let currentToneState = false; // false: silence, true: tone present
 		let letterBuffer = "";
 		let decodedText = "";
-		let dotDuration = 100; // initial dot duration (ms)
-		// Clamp dotDuration so it never goes below this value.
-		const MIN_DOT_DURATION = 35; // in ms, corresponding roughly to 35 wpm.
-		let animationFrameId; // for cancelling the graph update.
+		let dotDuration = 90; // initial dot duration (ms)
+		const MIN_DOT_DURATION = 35; // ~ 35 wpm
+		let animationFrameId;
+
+		let lastLetters = []; // FIFO buffer for last 6 letters
 
 		// Expanded Morse code dictionary.
 		const MORSE_CODE = {
@@ -102,25 +112,11 @@
 			"--..": "Z",
 			"-----": "0", ".----": "1", "..---": "2", "...--": "3", "....-": "4",
 			".....": "5", "-....": "6", "--...": "7", "---..": "8", "----.": "9",
-			".-.-.-": ".",  // period
-			"--..--": ",",  // comma
-			"..--..": "?",  // question mark
-			".----.": "'",  // apostrophe
-			"-.-.--": "!",  // exclamation mark
-			"-..-.": "/",  // slash
-			"-.--.": "(",  // left parenthesis
-			"-.--.-": ")",  // right parenthesis
-			".-...": "&",  // ampersand
-			"---...": ":",  // colon
-			"-.-.-.": ";",  // semicolon
-			"-...-": "=",  // equals sign
-			".-.-.": "+",  // plus sign
-			"-....-": "-",  // hyphen/minus
-			"..--.-": "_",  // underscore
-			".-..-.": "\"",  // quotation marks
-			"...-..-": "$",  // dollar sign
-			".--.-.": "@",  // at sign
-			"-----.": "Ö"  // special mapping for Ö as provided
+			".-.-.-": ".", "--..--": ",", "..--..": "?", ".----.": "'",
+			"-.-.--": "!", "-..-.": "/", "-.--.": "(", "-.--.-": ")",
+			".-...": "&", "---...": ":", "-.-.-.": ";", "-...-": "=",
+			".-.-.": "+", "-....-": "-", "..--.-": "_", ".-..-.": "\"",
+			"...-..-": "$", ".--.-.": "@", "-----.": "Ö"
 		};
 
 		// Define a 4-bit (16 values) RGB modified rainbow colormap from blue to red
@@ -137,9 +133,9 @@
 			[0xf0, 0x5b, 0x12, alpha], [0xd6, 0x35, 0x06, alpha],
 			[0xaf, 0x18, 0x01, alpha], [0x7a, 0x04, 0x03, alpha],
 			// special values
-			[0x00, 0x00, 0x00, alpha],  // 16 black
-			[0xFF, 0xFF, 0xFF, alpha],  // 17 white
-			[0xD0, 0xD0, 0xD0, alpha],  // 18 light gray
+			[0x00, 0x00, 0x00, alpha], // 16 black
+			[0xFF, 0xFF, 0xFF, alpha], // 17 white
+			[0xD0, 0xD0, 0xD0, alpha], // 18 light gray
 		];
 		// TODO: Adjust plotxscale based on width?
 		let plotxscale = 6;
@@ -172,7 +168,7 @@
 					plotyscale * (spHeight - values[i]*(spHeight/256)));
 			}
 			spCtx.lineTo(plotxscale * spWidth, plotyscale * spHeight);
-			spCtx.moveTo(0, plotyscale * spHeight);  // close for fill
+			spCtx.moveTo(0, plotyscale * spHeight); // close for fill
 			spCtx.fillStyle = "#CCC";
 			spCtx.strokeStyle = "#CCC";
 			spCtx.fill();
@@ -206,20 +202,20 @@
 				plotyscale * wfHeight);
 			// expand values (uint8) to colormap values (RGBA per pixel)
 			let colorValues = new Uint8ClampedArray(
-				plotxscale * (values.length) * 4);  // filled with 0
+				plotxscale * (values.length) * 4); // filled with 0
 			for(var i=0; i<values.length; i++) {
 				for (var k=0; k<plotxscale; k++) {
-					for (var j=0; j<4; j++) {  // r, g, b
+					for (var j=0; j<4; j++) { // r, g, b
 						colorValues[
 							((plotxscale*i + k) * 4) + j
-						] = colormap[values[i]>>4][j];  // RGBA
+						] = colormap[values[i]>>4][j]; // RGBA
 					}
 				}
 			}
-			let centercolor = 16;  // black
-			let edgecolor = 17;  // white
+			let centercolor = 16; // black
+			let edgecolor = 17; // white
 			let centerIndex = Math.round(plotxscale * (lowIndex + highIndex) / 2);
-			for (var j=0; j<4; j++) {  // r, g, b
+			for (var j=0; j<4; j++) { // r, g, b
 				colorValues[plotxscale * lowIndex*4 + j] = colormap[edgecolor][j];
 				colorValues[centerIndex * 4 + j] = colormap[centercolor][j];
 				colorValues[plotxscale * highIndex*4 + j] = colormap[edgecolor][j];
@@ -230,6 +226,49 @@
 				wfCtx.putImageData(imageData, 0, k);
 			}
 		};
+
+		// ======================================================
+		// Partial Reset (without clearing decodedText)
+		// ======================================================
+		function partialReset() {
+			console.log("Partial reset triggered (many E/T).");
+			// Just reset internal timing/state – do NOT clear decodedText
+			letterBuffer = "";
+			dotDuration = 100;
+			currentToneState = false;
+			lastStateChangeTime = performance.now();
+		}
+
+		// ======================================================
+		// Handle a freshly decoded letter
+		// ======================================================
+		function handleDecodedLetter(letter) {
+			// Trim in case there's stray whitespace
+			letter = letter.trim();
+
+			// Append to the visible text
+			decodedText += letter;
+			output.innerText = decodedText;
+
+			// If it's not a space, track it in 'lastLetters'
+			if (letter !== "") {
+				// Exclude actual "space" char from partial reset detection
+				if (letter !== " ") {
+					lastLetters.push(letter);
+					if (lastLetters.length > MAX_LAST_LETTERS) {
+						lastLetters.shift();
+					}
+
+					// If we have exactly 6 non-space letters, check if all E/T
+					if (lastLetters.length === MAX_LAST_LETTERS) {
+						const allET = lastLetters.every(ch => ch === "E" || ch === "T");
+						if (allET) {
+							partialReset();
+						}
+					}
+				}
+			}
+		}
 
 		// Decodes a Morse string (e.g. ".-") to its corresponding character.
 		function decodeMorse(code) {
@@ -252,13 +291,13 @@
 			return Math.sqrt(q1 * q1 + q2 * q2 - q1 * q2 * coeff);
 		}
 
-		// Processes incoming audio blocks and performs tone detection and Morse decoding.
+		// Audio processing: detect tone presence, decode Morse.
 		function processAudio(event) {
 			const inputBuffer = event.inputBuffer;
 			const samples = inputBuffer.getChannelData(0);
 			// Scan candidate frequencies.
 			let bestMagnitude = 0;
-			let bestFrequency = 700; // default.
+			let bestFrequency = 700; // default
 			for (let f = FREQ_MIN; f <= FREQ_MAX; f += FREQ_STEP) {
 				const mag = goertzel(samples, audioContext.sampleRate, f);
 				if (mag > bestMagnitude) {
@@ -268,41 +307,39 @@
 			}
 			const magnitude = bestMagnitude;
 
-			// Use hysteresis: if a tone is already active, drop only when magnitude falls below THRESHOLD_OFF.
+			// Hysteresis threshold:
 			const toneDetected = currentToneState ? (magnitude > THRESHOLD_OFF) : (magnitude > THRESHOLD_ON);
 
-			// Update the tone indicator as a bar graph.
+			// Update tone indicator bar graph
 			let fillWidth = 0;
 			if (magnitude > THRESHOLD_ON) {
 				fillWidth = Math.min(100, (magnitude - THRESHOLD_ON) * 5);
 			}
 			document.getElementById("indicatorFill").style.width = fillWidth + "px";
 
-			console.log("Detected frequency: " + bestFrequency + " Hz, Magnitude: " + magnitude.toFixed(2));
-
-			// Check for a state change (tone on/off) for Morse decoding.
+			// On/off transitions for Morse decoding
 			if (toneDetected !== currentToneState) {
 				const now = performance.now();
 				const duration = now - lastStateChangeTime;
 				lastStateChangeTime = now;
 
-				if (currentToneState) { // Tone ended.
+				if (currentToneState) {
+					// Tone ended => dot or dash
 					if (duration < 1.5 * dotDuration) {
 						letterBuffer += ".";
-						// Update dotDuration only for dots.
-						dotDuration = 0.9 * dotDuration + 0.1 * duration;
-						// Clamp dotDuration so it never goes below MIN_DOT_DURATION.
-						dotDuration = Math.max(MIN_DOT_DURATION, dotDuration);
-						console.log("Detected dot: duration " + duration.toFixed(2) + " ms, updated dotDuration: " + dotDuration.toFixed(2));
+						dotDuration = Math.max(
+							MIN_DOT_DURATION,
+							0.9 * dotDuration + 0.1 * duration
+						);
 					} else {
 						letterBuffer += "-";
-						console.log("Detected dash: duration " + duration.toFixed(2) + " ms.");
+						// console.log("Detected dash, duration " + duration.toFixed(2));
 					}
-				} else { // Silence ended.
+				} else {
+					// Silence ended => letter gap or word gap
 					if (duration >= 1.5 * dotDuration && duration < 3.5 * dotDuration) {
 						const letter = decodeMorse(letterBuffer);
 						decodedText += letter;
-						console.log("Letter gap: duration " + duration.toFixed(2) + " ms, decoded letter: " + letter);
 						letterBuffer = "";
 						output.innerText = decodedText;
 						// scroll to show new output
@@ -311,11 +348,9 @@
 						if (letterBuffer.length > 0) {
 							const letter = decodeMorse(letterBuffer);
 							decodedText += letter;
-							console.log("Word gap (letter): duration " + duration.toFixed(2) + " ms, decoded letter: " + letter);
 							letterBuffer = "";
 						}
 						decodedText += " ";
-						console.log("Word gap: added space.");
 						output.innerText = decodedText;
 						// scroll to show new output
 						output.scrollTop = output.scrollHeight;
@@ -325,7 +360,7 @@
 			}
 		}
 
-		// Resets the decoder's internal parameters.
+		// Resets the decoder's internal parameters
 		function resetParameters() {
 			lastStateChangeTime = performance.now();
 			currentToneState = false;
@@ -336,7 +371,13 @@
 			console.log("Decoder parameters have been reset.");
 		}
 
-		// Update the frequency plots.
+		// Clear text only
+		function Cleartext() {
+			decodedText = "";
+			output.innerText = "";
+		}
+
+		// Update the frequency plots
 		function updatePlots() {
 			if (!analyser) {
 				animationFrameId = requestAnimationFrame(updateFreqGraph);
@@ -352,7 +393,7 @@
 			animationFrameId = requestAnimationFrame(updatePlots);
 		}
 
-		// Starts the microphone capture and decoding process.
+		// Start decoding
 		function startMorseDecoder() {
 			if (isRunning) return;
 			isRunning = true;
@@ -361,29 +402,29 @@
 					audioContext = new (window.AudioContext || window.webkitAudioContext)();
 					microphoneStream = audioContext.createMediaStreamSource(stream);
 
-					// Create an analyser node for the plots.
+					// Analyser for plots
 					analyser = audioContext.createAnalyser();
 					analyser.fftSize = FFTSIZE;
 					microphoneStream.connect(analyser);
 
-					// Create a ScriptProcessor node for Morse decoding.
+					// ScriptProcessor for decoding
 					scriptProcessor = audioContext.createScriptProcessor(BUFFER_SIZE, 1, 1);
 					scriptProcessor.onaudioprocess = processAudio;
 					microphoneStream.connect(scriptProcessor);
 					scriptProcessor.connect(audioContext.destination);
 
-					console.log("Morse decoder started.");
 					document.getElementById("startButton").disabled = true;
 					document.getElementById("stopButton").disabled = false;
 					document.getElementById("resetButton").disabled = false;
-					// Reset variables.
+					// Reset variables
 					lastStateChangeTime = performance.now();
 					currentToneState = false;
 					letterBuffer = "";
 					decodedText = "";
 					dotDuration = 100;
 					output.innerText = "";
-					// Begin updating the frequency plots.
+
+					// Begin updating the frequency plots
 					updatePlots();
 				})
 				.catch(err => {
@@ -391,10 +432,11 @@
 				});
 		}
 
-		// Stops the decoding process and releases audio resources.
+		// Stop decoding
 		function stopMorseDecoder() {
 			if (!isRunning) return;
 			isRunning = false;
+
 			if (scriptProcessor) {
 				scriptProcessor.disconnect();
 				scriptProcessor.onaudioprocess = null;
@@ -411,13 +453,14 @@
 			if (animationFrameId) {
 				cancelAnimationFrame(animationFrameId);
 			}
+
 			console.log("Morse decoder stopped.");
 			document.getElementById("startButton").disabled = false;
 			document.getElementById("stopButton").disabled = true;
 			document.getElementById("resetButton").disabled = true;
 		}
 
-		// Adjust canvas width for responsiveness.
+		// Resize canvases for responsiveness
 		function resizeCanvases() {
 			// Set the canvas width to 90% of the body's width.
 			wfWidth = Math.round(document.body.clientWidth * 0.9);
@@ -426,12 +469,12 @@
 			spCanvas.width = wfWidth;
 		}
 		window.addEventListener('resize', resizeCanvases);
-		// Initialise canvas size.
-		resizeCanvases();
+		resizeCanvases(); // initial
 
 		document.getElementById("startButton").addEventListener("click", startMorseDecoder);
 		document.getElementById("stopButton").addEventListener("click", stopMorseDecoder);
-		document.getElementById("resetButton").addEventListener("click", resetParameters);
+		document.getElementById("resetButton").addEventListener("click", partialReset);
+		document.getElementById("CleartextButton").addEventListener("click", Cleartext);
 	</script>
 </body>
 </html>
