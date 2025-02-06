@@ -1,4 +1,4 @@
-Copyright (C) 2025 Paul Harrison DJ0CU/G4ADF
+Copyright (C) 2025 Paul Harrison DJ0CU/G4ADF, Peter LaRue AI7YN
 
 Permission to use, copy, modify, and/or distribute this software for
 any purpose with or without fee is hereby granted.
