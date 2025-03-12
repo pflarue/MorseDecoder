@@ -2,7 +2,7 @@
 
 A simple Morse code decoder that runs in a web browser window using audio from the computer microphone. It automatically adjusts for speeds between about 12 and 30 words per minute with the Morse code audio frequency between 650 and 790 Hz.  It should work on most any computer, tablet, or smartphone where you can run a modern web browser.
 
-MorseDecoder was written by Paul Harrison DJ0CU/G4ADF.  This repository using a Zero Clause BSD license was created with his permission.
+MorseDecoder was written by Paul Harrison DJ0CU/G4ADF.  [This repository](https://github.com/pflarue/MorseDecoder), using a Zero Clause BSD license, was created with his permission.
 
 Since MorseDecoder uses your computer's microphone to get the audio to decode, you can use it with your computer or smartphone sitting near an amateur or shortwave radio that is receiving morse code.  Fine tuning is required to get the audio frequency between 650 and 790 Hz.  You can also run MorseDecoder.html in one browser window, while getting audio from a Web SDR such as one at the [Northern Utah WebSDR](http://websdr1.sdrutah.org:8901/index1a.html) in another browser window.  Thus, your computer plays the audio through your speakers and re-captures the audio from your microphone.  Here is a screenshot of using that approach to decode a CW transmission from W1AW:
 
